@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from PIL import Image
 from snowflake.snowpark import Session
-from openai import AzureOpenAI
+from openai import OpenAI  # Switched to standard OpenAI client
 from streamlit_option_menu import option_menu
 from streamlit_extras.stylable_container import stylable_container
 
@@ -25,25 +25,22 @@ st.set_page_config(
 )
 
 # Jade Global Standard Colors
-JADE_BLUE = "#175388"  # Sidebar Inactive / Headers
-JADE_GOLD = "#ecb713"  # Sidebar Active / Metrics
+JADE_BLUE = "#175388"
+JADE_GOLD = "#ecb713"
 
 # ───────────────────────── Custom UI Styling ─────────────────────────
 CUSTOM_CSS = f"""
 <style>
-    /* Global Container */
     .block-container {{ padding-top: 1.5rem !important; padding-bottom: 2rem !important; }}
     .stAppHeader {{ visibility: hidden; }}
     footer {{ visibility: hidden; }}
 
-    /* Sidebar Logo: Forced to 60% Width */
     [data-testid="stSidebar"] {{ background-color: #ffffff; }}
     [data-testid=stSidebar] [data-testid=stImage] img {{
         text-align: center; display: block; margin-left: auto; margin-right: auto; 
         width: 60% !important; height: auto;
     }}
 
-    /* Sidebar Branding Text */
     .app-title {{
         text-align: center; color: {JADE_BLUE}; font-weight: bold;
         font-size: 22px; margin-top: -10px; margin-bottom: 0px;
@@ -52,7 +49,6 @@ CUSTOM_CSS = f"""
         text-align: center; color: {JADE_BLUE}; font-size: 14px; margin-bottom: 20px;
     }}
 
-    /* Jade Standard Buttons */
     .stButton > button {{
         border-radius: 8px !important;
         border: 2px solid #144774 !important;
@@ -68,7 +64,6 @@ CUSTOM_CSS = f"""
         color: {JADE_BLUE} !important;
     }}
 
-    /* AI Report styling */
     .report-view {{
         background-color: #ffffff; padding: 35px; border: 1px solid #e0e0e0;
         font-family: 'Georgia', serif; line-height: 1.6; color: #333;
@@ -81,7 +76,6 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # ───────────────────────── System Logic & Helpers ─────────────────────────
 
 def get_snowflake_session():
-    """Returns the Snowflake session from state or creates a new one."""
     try:
         if "snowflake_session" not in st.session_state:
             st.session_state.snowflake_session = Session.builder.configs(st.secrets["snowflake"]).create()
@@ -92,7 +86,6 @@ def get_snowflake_session():
 
 @st.cache_data(ttl=600)
 def fetch_data(query):
-    """Queries Snowflake and caches results for 10 minutes."""
     session = get_snowflake_session()
     if session:
         try:
@@ -101,29 +94,23 @@ def fetch_data(query):
             return pd.DataFrame()
     return pd.DataFrame()
 
-def get_azure_ai_response(prompt):
-    """Direct Azure OpenAI gpt-5-mini connection."""
+def get_ai_response(prompt):
+    """
+    Standard OpenAI GPT-4o integration.
+    Ensure 'openai_api_key' is set in .streamlit/secrets.toml
+    """
     try:
-        endpoint="https://elevaite-2026.cognitiveservices.azure.com/"
-        model_name = "gpt-5-mini"
-        deployment = "hackathon-model-grp-04"
-        subscription_key = st.secrets["azure_openai_key"]
-        api_version = "2024-02-01"
+        if "openai_api_key" not in st.secrets:
+            return "Error: 'openai_api_key' missing from secrets."
 
-        client = AzureOpenAI(
-            api_version=api_version,
-            azure_endpoint=endpoint,
-            api_key=subscription_key,
-        )
-
+        client = OpenAI(api_key=st.secrets["openai_api_key"])
+        
         response = client.chat.completions.create(
+            model="gpt-4o",  # Standard OpenAI model name
             messages=[
                 {"role": "system", "content": "You are a Quality Engineering & Compliance AI for FailGuardAI."},
                 {"role": "user", "content": prompt}
-            ],
-            max_completion_tokens=16384,
-            model=deployment
-
+            ]
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -131,19 +118,20 @@ def get_azure_ai_response(prompt):
 
 def run_system_check():
     """Diagnostic function to test connections."""
-    status = {"snowflake": False, "azure": False}
+    status = {"snowflake": False, "openai": False}
     try:
         session = get_snowflake_session()
         if session and session.sql("SELECT 1").collect():
             status["snowflake"] = True
     except: pass
     try:
-        client = AzureOpenAI(api_version="2024-02-01", 
-                             azure_endpoint="https://elevaite-2026.cognitiveservices.azure.com/", 
-                             api_key=st.secrets["azure_openai_key"])
-        res = client.chat.completions.create(messages=[{"role":"user","content":"hi"}], 
-                                            model="hackathon-model-grp-04", max_tokens=5)
-        if res: status["azure"] = True
+        client = OpenAI(api_key=st.secrets["openai_api_key"])
+        res = client.chat.completions.create(
+            messages=[{"role":"user","content":"hi"}], 
+            model="gpt-4o", 
+            max_tokens=5
+        )
+        if res: status["openai"] = True
     except: pass
     return status
 
@@ -166,7 +154,7 @@ def render_metric(key, label, value):
 # ───────────────────────── Page Controllers ─────────────────────────
 
 def page_dashboard(df_claims, df_batches, df_alerts):
-    render_banner("FailGuardAI Operations Dashboard", "Real-time analytics and AI-powered insights across product reliability and warranty operations.")
+    render_banner("FailGuardAI Operations Dashboard", "Real-time analytics and AI-powered insights across product reliability.")
     m1, m2, m3, m4 = st.columns(4)
     with m1: render_metric("m1", "Total Claims", f"{len(df_claims):,}")
     with m2: render_metric("m2", "Liability Exposure", f"${df_claims['REPAIR_COST'].sum()/1e6:.1f}M")
@@ -176,10 +164,10 @@ def page_dashboard(df_claims, df_batches, df_alerts):
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(px.pie(df_claims, names='FAILURE_TYPE', title="Claims by Failure Category", hole=0.5, color_discrete_sequence=[JADE_BLUE, JADE_GOLD, "#2A7B9B"]), width='stretch')
+        st.plotly_chart(px.pie(df_claims, names='FAILURE_TYPE', title="Claims by Failure Category", hole=0.5, color_discrete_sequence=[JADE_BLUE, JADE_GOLD, "#2A7B9B"]), use_container_width=True)
     with c2:
         merged = df_claims.merge(df_batches, on='BATCH_ID')
-        st.plotly_chart(px.bar(merged.groupby('PLANT_LOCATION')['REPAIR_COST'].sum().reset_index(), x='REPAIR_COST', y='PLANT_LOCATION', orientation='h', title="Liability by Manufacturing Plant", color_discrete_sequence=[JADE_BLUE]), width='stretch')
+        st.plotly_chart(px.bar(merged.groupby('PLANT_LOCATION')['REPAIR_COST'].sum().reset_index(), x='REPAIR_COST', y='PLANT_LOCATION', orientation='h', title="Liability by Manufacturing Plant", color_discrete_sequence=[JADE_BLUE]), use_container_width=True)
 
 def page_risk_analysis(df_batches):
     render_banner("AI Root Cause Analysis", "Connecting manufacturing variances to field failure probability.")
@@ -191,44 +179,44 @@ def page_risk_analysis(df_batches):
         st.subheader("Batch Profile")
         st.info(f"**Supplier:** {batch_data['SUPPLIER_NAME']}\n\n**QC Score:** {batch_data['QC_SENSITIVITY_SCORE']}")
         if st.button("Generate Technical Hypothesis"):
-            with st.spinner("Azure gpt-5-mini analyzing patterns..."):
+            with st.spinner("OpenAI GPT-4o analyzing patterns..."):
                 prompt = f"Analyze Batch {batch_id} with QC score {batch_data['QC_SENSITIVITY_SCORE']}. Suggest specific engineering root causes."
-                st.markdown(f'<div class="report-view">{get_azure_ai_response(prompt)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="report-view">{get_ai_response(prompt)}</div>', unsafe_allow_html=True)
     with col_b:
         risk = min(batch_data['QC_SENSITIVITY_SCORE'] * 20, 100)
         fig = go.Figure(go.Indicator(mode="gauge+number", value=risk, title={'text': "Predicted Failure Prob (%)"}, gauge={'bar': {'color': JADE_BLUE}, 'steps': [{'range': [0, 50], 'color': "lightgreen"}, {'range': [50, 100], 'color': JADE_GOLD}]}))
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, use_container_width=True)
 
 def page_recall_planner(df_alerts):
-    render_banner("Recall Documentation AI", "Automated generation of safety notifications and customer compliance letters.")
+    render_banner("Recall Documentation AI", "Automated generation of safety notifications.")
     if df_alerts.empty:
         st.success("System Scan: No active critical alerts.")
     else:
         target = st.selectbox("Select Alert for Action", df_alerts['BATCH_ID'])
         if st.button("Draft Recall Notification"):
-            with st.spinner("Drafting via Azure AI..."):
-                doc = get_azure_ai_response(f"Draft a formal customer recall letter for Batch {target}.")
+            with st.spinner("Drafting via OpenAI..."):
+                doc = get_ai_response(f"Draft a formal customer recall letter for Batch {target}.")
                 st.markdown(f'<div class="report-view">{doc}</div>', unsafe_allow_html=True)
 
 def page_supplier_scorecard(df_batches, df_alerts):
-    render_banner("Supplier Quality Scorecard", "Ranking vendor reliability based on AI-predicted failure alerts and QC variances.")
+    render_banner("Supplier Quality Scorecard", "Ranking vendor reliability based on risk alerts.")
     sup_risk = df_batches.merge(df_alerts, on='BATCH_ID', how='left').fillna(0)
     scorecard = sup_risk.groupby('SUPPLIER_NAME').agg({'BATCH_ID': 'count', 'PREDICTED_FAILURE_PROBABILITY': 'mean'}).reset_index()
     scorecard.columns = ['Supplier Name', 'Total Batches', 'Avg Risk Score']
-    st.plotly_chart(px.bar(scorecard.sort_values('Avg Risk Score', ascending=False), x='Supplier Name', y='Avg Risk Score', color='Avg Risk Score', color_continuous_scale='Reds', title="Supplier Risk Ranking Index"), width='stretch')
-    st.dataframe(scorecard, width='stretch', hide_index=True)
+    st.plotly_chart(px.bar(scorecard.sort_values('Avg Risk Score', ascending=False), x='Supplier Name', y='Avg Risk Score', color='Avg Risk Score', color_continuous_scale='Reds', title="Supplier Risk Ranking Index"), use_container_width=True)
+    st.dataframe(scorecard, use_container_width=True, hide_index=True)
 
 def page_compliance_checker(df_claims):
-    render_banner("Regulatory Compliance AI", "Automated monitoring against mandatory 5% reporting thresholds.")
+    render_banner("Regulatory Compliance AI", "Automated monitoring against mandatory 5% thresholds.")
     stats = df_claims.groupby('BATCH_ID').size().reset_index(name='count')
     stats['rate'] = (stats['count'] / 1000) * 100
-    st.plotly_chart(px.bar(stats, x='BATCH_ID', y='rate', color='rate', color_continuous_scale='Reds', title="Failure Rate (%) per Batch"), width='stretch')
+    st.plotly_chart(px.bar(stats, x='BATCH_ID', y='rate', color='rate', color_continuous_scale='Reds', title="Failure Rate (%) per Batch"), use_container_width=True)
     violations = stats[stats['rate'] > 5.0]
     if not violations.empty:
-        st.error(f"🚨 Mandatory Reporting: {len(violations)} batches have exceeded the 5% threshold.")
+        st.error(f"🚨 Mandatory Reporting: {len(violations)} batches exceeded 5% threshold.")
         if st.button("Draft Government Safety Filing"):
-            with st.spinner("Drafting Section 15 report..."):
-                doc = get_azure_ai_response(f"Draft a Section 15 safety filing for Batch {violations.iloc[0]['BATCH_ID']}.")
+            with st.spinner("Drafting Section 15 report via GPT-4o..."):
+                doc = get_ai_response(f"Draft a Section 15 safety filing for Batch {violations.iloc[0]['BATCH_ID']}.")
                 st.markdown(f'<div class="report-view">{doc}</div>', unsafe_allow_html=True)
 
 # ───────────────────────── Main Execution ─────────────────────────
@@ -252,7 +240,7 @@ def main():
             }
         )
         st.divider()
-        st.caption("Infrastructure: Snowflake | Azure OpenAI")
+        st.caption("Infrastructure: Snowflake | OpenAI GPT-4o")
 
     try:
         df_batches = fetch_data("SELECT * FROM MANUFACTURING_DATA")
@@ -265,11 +253,11 @@ def main():
         elif page == 'Supplier Scorecard': page_supplier_scorecard(df_batches, df_alerts)
         elif page == 'Compliance Checker': page_compliance_checker(df_claims)
         elif page == 'Settings':
-            render_banner("⚙️ System Health Check", "Verify connectivity to Snowflake and Azure AI services.")
+            render_banner("⚙️ System Health Check", "Verify connectivity to Snowflake and OpenAI services.")
             if st.button("Run Connection Diagnostics"):
                 results = run_system_check()
                 st.success("Snowflake: CONNECTED") if results['snowflake'] else st.error("Snowflake: DISCONNECTED")
-                st.success("Azure AI: CONNECTED") if results['azure'] else st.error("Azure AI: DISCONNECTED")
+                st.success("OpenAI: CONNECTED") if results['openai'] else st.error("OpenAI: DISCONNECTED")
             
     except Exception as e:
         st.error(f"Critical System Error: {e}")
