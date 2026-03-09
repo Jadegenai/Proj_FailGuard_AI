@@ -1,0 +1,19 @@
+# Core Framework
+streamlit
+
+# Snowflake Connection
+snowflake-snowpark-python
+
+# AI & LLM Integration
+openai
+
+# Data Processing & Visualization
+pandas
+plotly
+
+# UI Enhancement Components
+streamlit-option-menu
+streamlit-extras
+
+# Image Processing (for Logo handling)
+Pillow
