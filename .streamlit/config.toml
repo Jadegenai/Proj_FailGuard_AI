@@ -1,0 +1,8 @@
+[theme]
+base="light"
+
+[theme.sidebar]
+
+
+[client]
+showSidebarNavigation=false
